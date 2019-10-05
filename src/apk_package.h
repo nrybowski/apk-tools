@@ -75,6 +75,7 @@ struct apk_dependency {
 	unsigned conflict : 1;
 	unsigned result_mask : 4;
 	unsigned fuzzy : 1;
+  	unsigned ignored : 1;
 };
 APK_ARRAY(apk_dependency_array, struct apk_dependency);
 

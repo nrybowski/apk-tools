@@ -291,6 +291,9 @@ static void apply_constraint(struct apk_solver_state *ss, struct apk_package *pp
 	if (dep->conflict && ss->ignore_conflict)
 		return;
 
+  	if (dep->ignored)
+    		name->ss.ignored = 1;
+
 	name->ss.requirers += !dep->conflict;
 	if (name->ss.requirers == 1 && !dep->conflict)
 		name_requirers_changed(ss, name);
@@ -668,13 +671,13 @@ static void assign_name(struct apk_solver_state *ss, struct apk_name *name, stru
 
 static void select_package(struct apk_solver_state *ss, struct apk_name *name)
 {
-	struct apk_provider chosen = { NULL, &apk_null_blob }, *p;
+	struct apk_provider chosen = { NULL, &apk_null_blob }, *p, current = { NULL, &apk_null_blob };
 	struct apk_package *pkg = NULL;
 	struct apk_dependency *d;
 
 	dbg_printf("select_package: %s (requirers=%d, iif=%d)\n", name->name, name->ss.requirers, name->ss.has_iif);
 
-	if (name->ss.requirers || name->ss.has_iif) {
+  	if (name->ss.requirers || name->ss.has_iif) {
 		foreach_array_item(p, name->providers) {
 			dbg_printf("  consider "PKG_VER_FMT" iif_triggered=%d, tag_ok=%d, selectable=%d, available=%d, flags=0x%x, provider_priority=%d, installed=%d\n",
 				PKG_VER_PRINTF(p->pkg),
@@ -694,10 +697,16 @@ static void select_package(struct apk_solver_state *ss, struct apk_name *name)
 			    p->pkg->name->ss.requirers == 0 &&
 			    (p->pkg->provider_priority == 0 && name->providers->num > 1))
 				continue;
-			if (compare_providers(ss, p, &chosen) > 0)
+      			if (name->ss.ignored && p->pkg->ipkg != NULL) {
+         			current = *p;
+      			}
+      			if (compare_providers(ss, p, &chosen) > 0)
 				chosen = *p;
 		}
 	}
+
+  	if (name->ss.ignored)
+    		chosen = current;
 
 	pkg = chosen.pkg;
 	if (pkg) {
@@ -705,7 +714,14 @@ static void select_package(struct apk_solver_state *ss, struct apk_name *name)
 			/* Selecting broken or unallowed package */
 			mark_error(ss, pkg, "broken package / tag not ok");
 		}
-		dbg_printf("selecting: " PKG_VER_FMT ", available: %d\n", PKG_VER_PRINTF(pkg), pkg->ss.pkg_selectable);
+  
+#ifdef DEBUG_PRINT
+    	char* ign = "";
+    	if (name->ss.ignored)
+      		ign = " (upgrading ignored)";
+#endif
+    
+    	dbg_printf("selecting: " PKG_VER_FMT ", available: %d%s\n", PKG_VER_PRINTF(pkg), pkg->ss.pkg_selectable, ign);
 
 		assign_name(ss, pkg->name, APK_PROVIDER_FROM_PACKAGE(pkg));
 		foreach_array_item(d, pkg->provides)
@@ -1016,7 +1032,7 @@ restart:
 	dbg_printf("discovering world\n");
 	ss->solver_flags_inherit = solver_flags;
 	foreach_array_item(d, world) {
-		if (!d->broken)
+    		if (!d->broken)
 			discover_name(ss, d->name);
 	}
 	dbg_printf("applying world\n");

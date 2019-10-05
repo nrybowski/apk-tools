@@ -22,6 +22,8 @@ struct upgrade_ctx {
 	unsigned short solver_flags;
 	int no_self_upgrade : 1;
 	int self_upgrade_only : 1;
+  	unsigned int ignore;
+  	const char* i_pkg[10];
 };
 
 static int option_parse_applet(void *ctx, struct apk_db_options *dbopts, int optch, const char *optarg)
@@ -35,6 +37,10 @@ static int option_parse_applet(void *ctx, struct apk_db_options *dbopts, int opt
 	case 0x10001:
 		uctx->self_upgrade_only = 1;
 		break;
+	case 0x10002:
+	    	uctx->i_pkg[uctx->ignore] = optarg;
+	    	uctx->ignore++;
+	    	break;
 	case 'a':
 		uctx->solver_flags |= APK_SOLVERF_AVAILABLE;
 		break;
@@ -59,6 +65,9 @@ static const struct apk_option options_applet[] = {
 	{ 0x10000, "no-self-upgrade",
 	  "Do not do early upgrade of 'apk-tools' package" },
 	{ 0x10001, "self-upgrade-only", "Only do self-upgrade" },
+  	{ 0x10002, "ignore", "Ignore the upgrade of PACKAGE. Can be reused "
+    	  "multiple times (max 10). Partial upgrades not supported, this "
+    	  "might break your system.", required_argument, "PACKAGE" },
 };
 
 static const struct apk_option_group optgroup_applet = {
@@ -158,14 +167,37 @@ static int upgrade_main(void *ctx, struct apk_database *db, struct apk_string_ar
 	if (uctx->self_upgrade_only)
 		return 0;
 
-	if (solver_flags & APK_SOLVERF_AVAILABLE) {
+  	int solver_av = solver_flags & APK_SOLVERF_AVAILABLE;
+  	if (solver_av || uctx->ignore) {
 		apk_dependency_array_copy(&world, db->world);
-		foreach_array_item(dep, world) {
-			if (dep->result_mask == APK_DEPMASK_CHECKSUM) {
-				dep->result_mask = APK_DEPMASK_ANY;
-				dep->version = apk_blob_atomize(APK_BLOB_NULL);
-			}
-		}
+    		char* name, *p;
+    		int i, n_pkg = uctx->ignore, is_ignored;
+    		foreach_array_item(dep, world) {
+      			if (uctx->ignore) {
+        			name = dep->name->name;
+        			size_t name_len = strlen(name);
+        			for (i=0; i<uctx->ignore; i++) {
+          				p = (char*) uctx->i_pkg[i];
+          				is_ignored = !strncmp(name, (const char*) p, name_len);
+          				if (is_ignored) {
+            					apk_message("Ignoring upgrade : %s", name);
+            					dep->ignored = 1;
+            					n_pkg--;
+          				}
+        			}
+      			}
+           
+      			if (!n_pkg && !solver_av)
+        			// all the ignored packages are marked, no reason to continue the loop
+        			break;
+
+      			if (solver_av) {
+        			if (dep->result_mask == APK_DEPMASK_CHECKSUM) {
+          				dep->result_mask = APK_DEPMASK_ANY;
+          				dep->version = apk_blob_atomize(APK_BLOB_NULL);
+        			}
+      			}
+    		}
 	} else {
 		world = db->world;
 	}
